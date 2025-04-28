@@ -1,93 +1,52 @@
-name: Semantic Release and Deployment
+name: Semantic Release
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-env:
-  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false
-  JAVA_VERSION: '17'
-  DISTRIBUTION: 'temurin'
-
 jobs:
-  build:
-    name: Build and Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: ${{ env.DISTRIBUTION }}
-          cache: 'maven'
-
-      - name: Build with Maven
-        run: mvn -B clean verify
-
   release:
-    name: Semantic Release
-    needs: build
+    name: Semantic Versioning
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
-      packages: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Java
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install semantic-release
+        run: |
+          npm install -g semantic-release@21
+          npm install -g @semantic-release/changelog @semantic-release/git @semantic-release/exec
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: ${{ env.DISTRIBUTION }}
+          java-version: '17'
+          distribution: 'temurin'
           cache: 'maven'
 
-      - name: Configure Maven Settings
-        run: |
-          mkdir -p ~/.m2
-          cat <<EOF > ~/.m2/settings.xml
-          <settings>
-            <servers>
-              <server>
-                <id>ossrh</id>
-                <username>\${env.OSSRH_USERNAME}</username>
-                <password>\${env.OSSRH_TOKEN}</password>
-              </server>
-            </servers>
-          </settings>
-          EOF
-
       - name: Run Semantic Release
-        uses: cycjimmy/semantic-release-action@v3
-        id: semantic-release
+        run: |
+          npx semantic-release --extends .releaserc.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          extra_plugins: |
-            @semantic-release/changelog
-            @semantic-release/git
-            @semantic-release/exec
-          branch: main
-          dry_run: false
-          extends: .releaserc.json
 
-      - name: Deploy to Maven Central
-        if: success() && github.event_name == 'push'
-        run: |
-          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "Deploying version $VERSION"
-          mvn -B deploy -DskipTests -P release
+      - name: Deploy to Maven
+        if: success()
+        run: mvn -B deploy -DskipTests
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
