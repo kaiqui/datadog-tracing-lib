@@ -4,12 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.example</groupId>
+    <groupId>io.github.kaiqui</groupId>
     <artifactId>datadog-tracing-lib</artifactId>
-    <version>1.0.0</version>
+    <version>0.0.0-SNAPSHOT</version>
     <packaging>jar</packaging>
+
     <name>DataDog Tracing Library</name>
     <description>Advanced tracing library for DataDog integration</description>
+    <url>https://github.com/kaiqui/datadog-tracing-lib</url>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
@@ -23,6 +25,13 @@
         <java.version>17</java.version>
         <dd-trace-api.version>1.45.2</dd-trace-api.version>
         <jackson.version>2.15.2</jackson.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+
+        <!-- Versões dos Plugins -->
+        <changelog.plugin.version>2.6</changelog.plugin.version>
+        <release.plugin.version>3.0.0</release.plugin.version>
+        <deploy.plugin.version>3.1.1</deploy.plugin.version>
     </properties>
 
     <dependencies>
@@ -59,54 +68,20 @@
     </dependencies>
 
     <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <source>8</source>
-                    <target>8</target>
-                </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-source-plugin</artifactId>
-                <version>3.2.1</version>
-                <executions>
-                    <execution>
-                        <id>attach-sources</id>
-                        <goals>
-                            <goal>jar-no-fork</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <!-- Plugin para versionamento automático -->
-            <plugin>
+        <extensions xmlns="http://maven.apache.org/EXTENSIONS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/EXTENSIONS/1.0.0 http://maven.apache.org/xsd/core-extensions-1.0.0.xsd">
+            <extension>
                 <groupId>fr.brouillard.oss</groupId>
                 <artifactId>jgitver-maven-plugin</artifactId>
-                <version>${jgitver.version}</version>
-                <configuration>
-                    <policy>SEMANTIC_VERSION</policy>
-                    <useDirty>false</useDirty>
-                    <autoIncrementPatch>true</autoIncrementPatch>
-                    <useGitCommitId>false</useGitCommitId>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>calculate</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Plugin para gerar changelog -->
+                <version>1.9.0</version>
+            </extension>
+        </extensions>
+        <plugins>
+            <!-- Plugin de Changelog -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-changelog-plugin</artifactId>
-                <version>${changelog.version}</version>
+                <version>${changelog.plugin.version}</version>
                 <configuration>
                     <type>range</type>
                     <range>HEAD</range>
@@ -115,11 +90,11 @@
                 </configuration>
             </plugin>
 
-            <!-- Plugin para publicação -->
+            <!-- Plugin de Release -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-release-plugin</artifactId>
-                <version>${maven-release.version}</version>
+                <version>${release.plugin.version}</version>
                 <configuration>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
                     <tagNameFormat>v@{project.version}</tagNameFormat>
@@ -128,13 +103,18 @@
                 </configuration>
             </plugin>
 
+            <!-- Plugin de Deploy -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-deploy-plugin</artifactId>
+                <version>${deploy.plugin.version}</version>
+            </plugin>
         </plugins>
     </build>
     <scm>
-        <connection>scm:git:https://github.com/${github.owner}/${github.repo}.git</connection>
-        <developerConnection>scm:git:ssh://git@github.com/${github.owner}/${github.repo}.git</developerConnection>
-        <url>https://github.com/${github.owner}/${github.repo}</url>
-        <tag>HEAD</tag>
+        <connection>scm:git:https://github.com/kaiqui/datadog-tracing-lib.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/kaiqui/datadog-tracing-lib.git</developerConnection>
+        <url>https://github.com/kaiqui/datadog-tracing-lib</url>
     </scm>
 
     <distributionManagement>

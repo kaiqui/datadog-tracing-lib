@@ -6,43 +6,68 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  release:
     name: Build and Release
     runs-on: ubuntu-latest
+    env:
+      JAVA_VERSION: '17'
+      DISTRIBUTION: 'temurin'
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Essential para o jgitver
 
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.DISTRIBUTION }}
           cache: 'maven'
+          server-id: ossrh
+          server-username: ${{ secrets.OSSRH_USERNAME }}
+          server-password: ${{ secrets.OSSRH_TOKEN }}
 
-      - name: Determine Version
+      - name: Validate environment
+        run: |
+          java -version
+          mvn -version
+
+      - name: Calculate version
         id: version
         run: |
+          mvn jgitver:calculate
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Calculated version: ${VERSION}"
 
-      - name: Generate Changelog
-        run: mvn changelog:changelog -DchangesSince=HEAD
+      - name: Show Git history
+        run: |
+          git log --graph --oneline -n 10
+          git tag -l
 
-      - name: Commit changes
+      - name: Generate changelog
+        run: mvn changelog:changelog
+
+      - name: Prepare release
         if: contains(steps.version.outputs.version, 'SNAPSHOT') == false
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add CHANGELOG.md
-          git commit -m "docs: update changelog for version ${{ steps.version.outputs.version }}"
-          git push origin main
+          mvn release:prepare -B \
+            -DreleaseVersion=${{ steps.version.outputs.version }} \
+            -DdevelopmentVersion=0.0.0-SNAPSHOT \
+            -Dtag=v${{ steps.version.outputs.version }}
 
-      - name: Release and Deploy
+      - name: Perform release
         if: contains(steps.version.outputs.version, 'SNAPSHOT') == false
-        run: mvn release:prepare release:perform -B
+        run: mvn release:perform
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+
+      - name: Deploy snapshot
+        if: contains(steps.version.outputs.version, 'SNAPSHOT')
+        run: mvn deploy -B
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
