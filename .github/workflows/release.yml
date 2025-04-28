@@ -29,7 +29,8 @@ jobs:
           mvn -B clean verify
 
       - name: Exibir versão calculada
-        run: echo "Calculated version: $(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+        run: |
+          echo "Calculated version: $(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
 
       - name: Deploy
         if: github.ref == 'refs/heads/main'
