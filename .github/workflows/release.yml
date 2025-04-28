@@ -1,4 +1,4 @@
-name: Release
+name: Semantic Release and Deployment
 
 on:
   push:
@@ -7,10 +7,32 @@ on:
 
 env:
   MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false
+  JAVA_VERSION: '17'
+  DISTRIBUTION: 'temurin'
 
 jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.DISTRIBUTION }}
+          cache: 'maven'
+
+      - name: Build with Maven
+        run: mvn -B clean verify
+
   release:
-    name: Semantic Versioning and Deployment
+    name: Semantic Release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,35 +41,17 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Java
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.DISTRIBUTION }}
           cache: 'maven'
-
-      - name: Import GPG Key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          # Decodificar a chave
-          echo "$GPG_PRIVATE_KEY" | base64 -d > private-key.asc
-
-          # Verificar arquivo
-          head -n 1 private-key.asc | grep 'BEGIN PGP PRIVATE KEY BLOCK' || exit 1
-
-          # Importar chave
-          gpg --batch --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --import private-key.asc
-
-          # Configurar ambiente
-          echo "allow-preset-passphrase" >> ~/.gnupg/gpg-agent.conf
-          gpg-connect-agent reloadagent /bye
 
       - name: Configure Maven Settings
         run: |
@@ -61,15 +65,6 @@ jobs:
                 <password>\${env.OSSRH_TOKEN}</password>
               </server>
             </servers>
-            <profiles>
-              <profile>
-                <id>gpg</id>
-                <properties>
-                  <gpg.executable>gpg</gpg.executable>
-                  <gpg.passphrase>\${env.GPG_PASSPHRASE}</gpg.passphrase>
-                </properties>
-              </profile>
-            </profiles>
           </settings>
           EOF
 
@@ -78,19 +73,21 @@ jobs:
         id: semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         with:
           extra_plugins: |
-            @semantic-release/exec
             @semantic-release/changelog
             @semantic-release/git
+            @semantic-release/exec
           branch: main
+          dry_run: false
           extends: .releaserc.json
 
       - name: Deploy to Maven Central
-        if: success()
-        run: mvn -B deploy -P release
+        if: success() && github.event_name == 'push'
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "Deploying version $VERSION"
+          mvn -B deploy -DskipTests -P release
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
