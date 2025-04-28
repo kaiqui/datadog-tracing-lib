@@ -31,14 +31,22 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Setup GPG
+      - name: Import GPG Key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          echo "default-cache-ttl 3600" > ~/.gnupg/gpg-agent.conf
-          echo "max-cache-ttl 3600" >> ~/.gnupg/gpg-agent.conf
+          # Decodificar a chave
+          echo "$GPG_PRIVATE_KEY" | base64 -d > private-key.asc
+
+          # Verificar arquivo
+          head -n 1 private-key.asc | grep 'BEGIN PGP PRIVATE KEY BLOCK' || exit 1
+
+          # Importar chave
+          gpg --batch --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --import private-key.asc
+
+          # Configurar ambiente
+          echo "allow-preset-passphrase" >> ~/.gnupg/gpg-agent.conf
           gpg-connect-agent reloadagent /bye
 
       - name: Configure Maven Settings
