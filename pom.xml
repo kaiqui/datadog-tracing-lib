@@ -29,9 +29,8 @@
         <maven.compiler.target>${java.version}</maven.compiler.target>
 
         <!-- Versões dos Plugins -->
-        <changelog.plugin.version>2.6</changelog.plugin.version>
-        <release.plugin.version>3.0.0</release.plugin.version>
-        <deploy.plugin.version>3.1.1</deploy.plugin.version>
+        <release.plugin.version>3.1.1</release.plugin.version>
+        <deploy.plugin.version>3.1.4</deploy.plugin.version>
     </properties>
 
     <dependencies>
@@ -69,19 +68,6 @@
 
     <build>
         <plugins>
-           <!-- Plugin de Changelog -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-changelog-plugin</artifactId>
-                <version>${changelog.plugin.version}</version>
-                <configuration>
-                    <type>range</type>
-                    <range>HEAD</range>
-                    <quiet>true</quiet>
-                    <outputFile>CHANGELOG.md</outputFile>
-                </configuration>
-            </plugin>
-
             <!-- Plugin de Release -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
