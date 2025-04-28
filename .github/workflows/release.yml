@@ -1,73 +1,43 @@
-name: Java Semantic Release
+name: Java CI/CD
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  release:
+  build:
     name: Build and Release
     runs-on: ubuntu-latest
-    env:
-      JAVA_VERSION: '17'
-      DISTRIBUTION: 'temurin'
-
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Essential para o jgitver
+          fetch-depth: 0  # Essencial para o jgitver
 
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: ${{ env.DISTRIBUTION }}
+          java-version: '17'
+          distribution: 'temurin'
           cache: 'maven'
-          server-id: ossrh
-          server-username: ${{ secrets.OSSRH_USERNAME }}
-          server-password: ${{ secrets.OSSRH_TOKEN }}
 
-      - name: Validate environment
+      - name: Build with jgitver
         run: |
-          java -version
-          mvn -version
-
-      - name: Calculate version
-        id: version
-        run: |
-          mvn jgitver:calculate
+          # Executa o jgitver primeiro
+          mvn jgitver:jgitver
+          
+          # Mostra a versão calculada
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Calculated version: ${VERSION}"
+          echo "Calculated version: $VERSION"
+          
+          # Build completo
+          mvn -B clean verify
 
-      - name: Show Git history
-        run: |
-          git log --graph --oneline -n 10
-          git tag -l
-
-      - name: Generate changelog
-        run: mvn changelog:changelog
-
-      - name: Prepare release
-        if: contains(steps.version.outputs.version, 'SNAPSHOT') == false
-        run: |
-          mvn release:prepare -B \
-            -DreleaseVersion=${{ steps.version.outputs.version }} \
-            -DdevelopmentVersion=0.0.0-SNAPSHOT \
-            -Dtag=v${{ steps.version.outputs.version }}
-
-      - name: Perform release
-        if: contains(steps.version.outputs.version, 'SNAPSHOT') == false
-        run: mvn release:perform
-        env:
-          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-
-      - name: Deploy snapshot
-        if: contains(steps.version.outputs.version, 'SNAPSHOT')
-        run: mvn deploy -B
+      - name: Deploy
+        if: github.ref == 'refs/heads/main'
+        run: mvn -B deploy -DskipTests
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
