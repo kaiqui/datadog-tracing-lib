@@ -1,21 +1,22 @@
-name: Semantic Release
+name: Release
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - '**.md'
-      - '**.txt'
+    branches: [main]
   workflow_dispatch:
 
 env:
   MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false
 
 jobs:
-  build:
-    name: Build and Test
+  release:
+    name: Semantic Versioning and Deployment
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
 
     steps:
       - name: Checkout code
@@ -23,52 +24,65 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build with Maven
-        run: mvn -B verify
+      - name: Setup GPG
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "default-cache-ttl 3600" > ~/.gnupg/gpg-agent.conf
+          echo "max-cache-ttl 3600" >> ~/.gnupg/gpg-agent.conf
+          gpg-connect-agent reloadagent /bye
 
-  semantic-release:
-    name: Semantic Versioning
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+      - name: Configure Maven Settings
+        run: |
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings>
+            <servers>
+              <server>
+                <id>ossrh</id>
+                <username>\${env.OSSRH_USERNAME}</username>
+                <password>\${env.OSSRH_TOKEN}</password>
+              </server>
+            </servers>
+            <profiles>
+              <profile>
+                <id>gpg</id>
+                <properties>
+                  <gpg.executable>gpg</gpg.executable>
+                  <gpg.passphrase>\${env.GPG_PASSPHRASE}</gpg.passphrase>
+                </properties>
+              </profile>
+            </profiles>
+          </settings>
+          EOF
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Semantic Release
+      - name: Run Semantic Release
         uses: cycjimmy/semantic-release-action@v3
         id: semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         with:
           extra_plugins: |
             @semantic-release/exec
             @semantic-release/changelog
             @semantic-release/git
-            @semantic-release/maven
           branch: main
-          maven_pom: pom.xml
-          maven_settings: .github/settings.xml
-          exec_prepare: |
-            mvn versions:set -DnewVersion=${nextRelease.version}
-            mvn versions:commit
+          extends: .releaserc.json
 
-      - name: Publish to Maven Central
+      - name: Deploy to Maven Central
         if: success()
         run: mvn -B deploy -P release
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

@@ -3,18 +3,14 @@
   "plugins": [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
+    ["@semantic-release/exec", {
+      "prepareCmd": "mvn versions:set -DnewVersion=${nextRelease.version}"
+    }],
     "@semantic-release/changelog",
-    "@semantic-release/exec",
-    "@semantic-release/maven",
-    "@semantic-release/github",
-    "@semantic-release/git"
-  ],
-  "preset": "conventionalcommits",
-  "exec": {
-    "prepareCmd": "mvn versions:set -DnewVersion=${nextRelease.version}"
-  },
-  "git": {
-    "assets": ["pom.xml", "CHANGELOG.md"],
-    "message": "chore(release): ${nextRelease.version} [skip ci]"
-  }
+    ["@semantic-release/git", {
+      "assets": ["pom.xml", "CHANGELOG.md"],
+      "message": "chore(release): ${nextRelease.version} [skip ci]"
+    }],
+    "@semantic-release/github"
+  ]
 }
