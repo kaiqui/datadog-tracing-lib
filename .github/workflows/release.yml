@@ -1,4 +1,4 @@
-name: Semantic Release
+name: Java Semantic Release
 
 on:
   push:
@@ -6,47 +6,43 @@ on:
   workflow_dispatch:
 
 jobs:
-  release:
-    name: Semantic Versioning
+  build:
+    name: Build and Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install semantic-release
-        run: |
-          npm install -g semantic-release@21
-          npm install -g @semantic-release/changelog @semantic-release/git @semantic-release/exec
-
-      - name: Setup Java
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Run Semantic Release
+      - name: Determine Version
+        id: version
         run: |
-          npx semantic-release --extends .releaserc.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Deploy to Maven
-        if: success()
-        run: mvn -B deploy -DskipTests
+      - name: Generate Changelog
+        run: mvn changelog:changelog -DchangesSince=HEAD
+
+      - name: Commit changes
+        if: contains(steps.version.outputs.version, 'SNAPSHOT') == false
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for version ${{ steps.version.outputs.version }}"
+          git push origin main
+
+      - name: Release and Deploy
+        if: contains(steps.version.outputs.version, 'SNAPSHOT') == false
+        run: mvn release:prepare release:perform -B
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}

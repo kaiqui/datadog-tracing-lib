@@ -19,6 +19,7 @@
     </parent>
 
     <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <java.version>17</java.version>
         <dd-trace-api.version>1.45.2</dd-trace-api.version>
         <jackson.version>2.15.2</jackson.version>
@@ -81,6 +82,52 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- Plugin para versionamento automático -->
+            <plugin>
+                <groupId>fr.brouillard.oss</groupId>
+                <artifactId>jgitver-maven-plugin</artifactId>
+                <version>${jgitver.version}</version>
+                <configuration>
+                    <policy>SEMANTIC_VERSION</policy>
+                    <useDirty>false</useDirty>
+                    <autoIncrementPatch>true</autoIncrementPatch>
+                    <useGitCommitId>false</useGitCommitId>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>calculate</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Plugin para gerar changelog -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-changelog-plugin</artifactId>
+                <version>${changelog.version}</version>
+                <configuration>
+                    <type>range</type>
+                    <range>HEAD</range>
+                    <quiet>true</quiet>
+                    <outputFile>CHANGELOG.md</outputFile>
+                </configuration>
+            </plugin>
+
+            <!-- Plugin para publicação -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-release-plugin</artifactId>
+                <version>${maven-release.version}</version>
+                <configuration>
+                    <autoVersionSubmodules>true</autoVersionSubmodules>
+                    <tagNameFormat>v@{project.version}</tagNameFormat>
+                    <preparationGoals>clean verify</preparationGoals>
+                    <goals>deploy</goals>
+                </configuration>
+            </plugin>
+
         </plugins>
     </build>
     <scm>
