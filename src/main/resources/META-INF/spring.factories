@@ -1,2 +1,2 @@
 org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
-  com.example.datadog.config.DataDogTracingConfig
+  com.kailima.datadog.config.DataDogTracingConfig
