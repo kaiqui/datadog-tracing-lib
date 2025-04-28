@@ -1,7 +1,7 @@
-package com.kailima.datadog.aspect;
+package io.kailima.github.datadog.aspect;
 
-import com.kailima.datadog.annotation.DataDogTraceable;
-import com.kailima.datadog.exception.DataDogTracingException;
+import io.kailima.github.datadog.annotation.DataDogTraceable;
+import io.kailima.github.datadog.exception.DataDogTracingException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import datadog.trace.api.DDTags;
