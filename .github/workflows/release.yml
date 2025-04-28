@@ -23,17 +23,13 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build with jgitver
+      - name: Build with Maven
         run: |
-          # Executa o jgitver primeiro
-          mvn jgitver:jgitver
-          
-          # Mostra a versão calculada
-          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "Calculated version: $VERSION"
-          
-          # Build completo
+          # Maven já carregará o jgitver antes de tudo
           mvn -B clean verify
+
+      - name: Exibir versão calculada
+        run: echo "Calculated version: $(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
 
       - name: Deploy
         if: github.ref == 'refs/heads/main'
