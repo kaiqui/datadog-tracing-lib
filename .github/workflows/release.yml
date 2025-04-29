@@ -25,6 +25,14 @@ jobs:
           server-id: ossrh
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
+      
+      - name: Configure Maven
+        run: |
+          mkdir -p ~/.m2
+          cp .github/settings.xml ~/.m2/settings.xml
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
 
       - name: Build with Maven
         run: |
