@@ -1,27 +1,37 @@
 package io.kailima.github.aspect;
 
-import com.sismob.backoffice.utils.annotation.DataDogTraceable;
-import com.datadog.trace.api.interceptor.MutableSpan;
+import java.time.temporal.TemporalAccessor;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.aspectj.lang.Signature;
+import org.aspectj.lang.annotation.Around;
+import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+
 import datadog.trace.api.DDTags;
+import datadog.trace.api.interceptor.MutableSpan;
+import io.kailima.github.datadog.annotation.DataDogTraceable;
 import io.opentracing.Scope;
 import io.opentracing.Span;
 import io.opentracing.Tracer;
 import io.opentracing.tag.Tags;
 import io.opentracing.util.GlobalTracer;
-import org.aspectj.lang.ProceedingJoinPoint;
-import org.aspectj.lang.Signature;
-import org.aspectj.lang.reflect.MethodSignature;
-import org.aspectj.lang.annotation.Around;
-import org.aspectj.lang.annotation.Aspect;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 
 @Aspect
 @Component
@@ -30,11 +40,23 @@ public class DataDogTracingAspect {
     private final ObjectMapper objectMapper;
     private final Executor asyncExecutor;
 
+    private static final Executor INTERNAL_ASYNC_EXECUTOR = createDefaultExecutor();
+
     @Autowired
-    public DataDogTracingAspect(ObjectMapper objectMapper,
-                                Executor datadogAsyncExecutor) {
+    public DataDogTracingAspect(ObjectMapper objectMapper) {
         this.objectMapper = configureMapper(objectMapper);
-        this.asyncExecutor = datadogAsyncExecutor;
+        this.asyncExecutor = INTERNAL_ASYNC_EXECUTOR;
+    }
+
+    private static Executor createDefaultExecutor() {
+        int corePoolSize = Runtime.getRuntime().availableProcessors();
+        return new ThreadPoolExecutor(
+            corePoolSize,
+            corePoolSize * 2,
+            30L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(1000),
+            new ThreadPoolExecutor.CallerRunsPolicy()
+        );
     }
 
     @Around("@annotation(traceConfig)")
@@ -90,15 +112,16 @@ public class DataDogTracingAspect {
         String[] paramNames = extractParameterNames(jp);
         Object[] args = jp.getArgs();
 
-        CompletableFuture
-            .runAsync(() -> processSpan(tracer, span, cfg, args, paramNames, result, error),
-                      asyncExecutor)
+        Runnable processTask = () -> processSpan(tracer, span, cfg, args, paramNames, result, error);
+
+        CompletableFuture.runAsync(processTask, asyncExecutor)
             .whenComplete((v, t) -> {
                 if (finishOnComplete) {
                     span.finish();
                 }
             });
     }
+
 
     private void processSpan(Tracer tracer,
                              Span span,
@@ -160,7 +183,7 @@ public class DataDogTracingAspect {
             Map<String, Object> flat = convertToMapOrEmpty(list.get(i));
             for (Map.Entry<String, Object> e : flat.entrySet()) {
                 span.setTag(
-                  String.format("context.output.detail[%d].%s", i, e.getKey()),
+                  String.format("context.output.fuck[%d].%s", i, e.getKey()),
                   String.valueOf(e.getValue())
                 );
             }
@@ -170,13 +193,13 @@ public class DataDogTracingAspect {
     private void iterateMap(MutableSpan span, Map<String, Object> map) {
         Map<String, Object> sorted = new TreeMap<>(map);
         for (Map.Entry<String, Object> e : sorted.entrySet()) {
-            span.setTag("context.output.detail." + e.getKey(),
+            span.setTag("context.output.detail" + e.getKey(),
                         String.valueOf(e.getValue()));
         }
     }
 
     private void tagError(MutableSpan span, Throwable error) {
-        span.setTag(Tags.ERROR, true);
+        span.setTag(Tags.ERROR.getKey(), true);
         span.setTag("context.error.message", String.valueOf(error.getMessage()));
         span.setTag("context.error.stack", serializeStackTrace(error));
     }
@@ -187,13 +210,11 @@ public class DataDogTracingAspect {
         }
 
         if (returnValue instanceof Map<?, ?> map) {
-            // Caso 2: lista interna
             for (Object v : map.values()) {
                 if (v instanceof List<?>) {
                     return v;
                 }
             }
-            // Caso 3: chaves numéricas
             boolean allNumeric = true;
             TreeMap<Integer, Object> sorted = new TreeMap<>();
             for (Map.Entry<?, ?> entry : map.entrySet()) {
@@ -207,7 +228,6 @@ public class DataDogTracingAspect {
             if (allNumeric) {
                 return new ArrayList<>(sorted.values());
             }
-            // Caso 4 implícito
             return returnValue;
         }
 
@@ -256,6 +276,9 @@ public class DataDogTracingAspect {
     private String safeSerialize(Object obj) {
         if (obj == null) {
             return "null";
+        }
+        if (obj instanceof TemporalAccessor) {
+            return obj.toString();
         }
         try {
             return objectMapper.writeValueAsString(obj);

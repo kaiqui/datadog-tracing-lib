@@ -25,135 +25,92 @@
         <java.version>17</java.version>
         <dd-trace-api.version>1.45.2</dd-trace-api.version>
         <jackson.version>2.15.2</jackson.version>
-        <maven.compiler.source>${java.version}</maven.compiler.source>
-        <maven.compiler.target>${java.version}</maven.compiler.target>
-
-        <!-- Versões dos Plugins -->
-        <release.plugin.version>3.1.1</release.plugin.version>
-        <deploy.plugin.version>3.1.4</deploy.plugin.version>
+        <central.publishing.plugin.version>0.7.0</central.publishing.plugin.version>
     </properties>
 
+    <repositories>
+        <repository>
+            <name>Central Portal Snapshots</name>
+            <id>central-portal-snapshots</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
     <dependencies>
+        <!-- Suas dependências mantidas como estão -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
-
         <dependency>
             <groupId>com.datadoghq</groupId>
             <artifactId>dd-trace-api</artifactId>
             <version>${dd-trace-api.version}</version>
         </dependency>
-
-        <!-- OpenTracing API -->
         <dependency>
             <groupId>io.opentracing</groupId>
             <artifactId>opentracing-api</artifactId>
             <version>0.33.0</version>
         </dependency>
-
         <dependency>
             <groupId>io.opentracing</groupId>
             <artifactId>opentracing-util</artifactId>
             <version>0.33.0</version>
         </dependency>
-
-
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <!-- Plugin de Release -->
+            <!-- Plugin para publicação no Maven Central -->
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-release-plugin</artifactId>
-                <version>${release.plugin.version}</version>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>${central.publishing.plugin.version}</version>
+                <extensions>true</extensions>
                 <configuration>
-                    <autoVersionSubmodules>true</autoVersionSubmodules>
-                    <tagNameFormat>v@{project.version}</tagNameFormat>
-                    <preparationGoals>clean verify</preparationGoals>
-                    <goals>deploy</goals>
+                    <publishingServerId>central-portal-snapshots</publishingServerId>
+                    <autoReleaseAfterClose>false</autoReleaseAfterClose>
                 </configuration>
             </plugin>
 
-            <!-- Plugin de Deploy -->
+            <!-- Plugin para assinatura (opcional para snapshots)
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-deploy-plugin</artifactId>
-                <version>${deploy.plugin.version}</version>
-            </plugin>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.0.1</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin> -->
         </plugins>
     </build>
+
+    <distributionManagement>
+        <snapshotRepository>
+            <id>central-portal-snapshots</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        </snapshotRepository>
+    </distributionManagement>
+
     <scm>
         <connection>scm:git:https://github.com/kaiqui/datadog-tracing-lib.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/kaiqui/datadog-tracing-lib.git</developerConnection>
         <url>https://github.com/kaiqui/datadog-tracing-lib</url>
     </scm>
-
-    <distributionManagement>
-        <repository>
-        <id>ossrh</id>
-        <name>Central Repository OSSRH</name>
-        <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
-        </repository>
-  </distributionManagement>
-
-    <profiles>
-        <profile>
-            <id>release</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.7.0</version>
-                        <extensions>true</extensions>
-                        <configuration>
-                            <publishingServerId>central</publishingServerId>
-                        </configuration>
-                    </plugin>
-                    
-                    <plugin>
-                        <artifactId>maven-antrun-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <phase>validate</phase>
-                                <goals>
-                                    <goal>run</goal>
-                                </goals>
-                                <configuration>
-                                    <tasks>
-                                        <echo>used version: ${jgitver.used_version}</echo>
-                                        <echo>version calculated: ${jgitver.calculated_version}</echo>
-                                        <echo>dirty: ${jgitver.dirty}</echo>
-                                        <echo>head_committer_name: ${jgitver.head_committer_name}</echo>
-                                        <echo>head_commiter_email: ${jgitver.head_commiter_email}</echo>
-                                        <echo>head_commit_datetime: ${jgitver.head_commit_datetime}</echo>
-                                        <echo>git_sha1_full: ${jgitver.git_sha1_full}</echo>
-                                        <echo>git_sha1_8: ${jgitver.git_sha1_8}</echo>
-                                        <echo>branch_name: ${jgitver.branch_name}</echo>
-                                        <echo>head_tags: ${jgitver.head_tags}</echo>
-                                        <echo>head_annotated_tags: ${jgitver.head_annotated_tags}</echo>
-                                        <echo>head_lightweight_tags: ${jgitver.head_lightweight_tags}</echo>
-                                        <echo>base_tag: ${jgitver.base_tag}</echo>
-                                        <echo>all_tags: ${jgitver.all_tags}</echo>
-                                        <echo>all_annotated_tags: ${jgitver.all_annotated_tags}</echo>
-                                        <echo>all_lightweight_tags: ${jgitver.all_lightweight_tags}</echo>
-                                        <echo>all_version_tags: ${jgitver.all_version_tags}</echo>
-                                        <echo>all_version_annotated_tags: ${jgitver.all_version_annotated_tags}</echo>
-                                        <echo>all_version_lightweight_tags: ${jgitver.all_version_lightweight_tags}</echo>
-                                    </tasks>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 </project>
