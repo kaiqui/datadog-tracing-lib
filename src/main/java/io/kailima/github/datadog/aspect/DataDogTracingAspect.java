@@ -1,11 +1,7 @@
-package io.kailima.github.aspect;
+package io.kailima.github.datadog.aspect;
 
 import java.time.temporal.TemporalAccessor;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -13,11 +9,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.aspectj.lang.ProceedingJoinPoint;
-import org.aspectj.lang.Signature;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -30,45 +24,41 @@ import io.kailima.github.datadog.annotation.DataDogTraceable;
 import io.opentracing.Scope;
 import io.opentracing.Span;
 import io.opentracing.Tracer;
-import io.opentracing.tag.Tags;
 import io.opentracing.util.GlobalTracer;
 
 @Aspect
 @Component
 public class DataDogTracingAspect {
 
-    private final ObjectMapper objectMapper;
-    private final Executor asyncExecutor;
+    private final Tracer tracer = GlobalTracer.get();
+    private final ObjectMapper mapper;
+    private final Executor executor;
 
-    private static final Executor INTERNAL_ASYNC_EXECUTOR = createDefaultExecutor();
+    public DataDogTracingAspect(ObjectMapper baseMapper) {
+        this.mapper = baseMapper.copy()
+            .findAndRegisterModules()
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+            .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
 
-    @Autowired
-    public DataDogTracingAspect(ObjectMapper objectMapper) {
-        this.objectMapper = configureMapper(objectMapper);
-        this.asyncExecutor = INTERNAL_ASYNC_EXECUTOR;
-    }
-
-    private static Executor createDefaultExecutor() {
-        int corePoolSize = Runtime.getRuntime().availableProcessors();
-        return new ThreadPoolExecutor(
-            corePoolSize,
-            corePoolSize * 2,
-            30L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(1000),
+        int cores = Runtime.getRuntime().availableProcessors();
+        this.executor = new ThreadPoolExecutor(
+            cores, cores * 2,
+            30, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(1_000),
             new ThreadPoolExecutor.CallerRunsPolicy()
         );
     }
 
-    @Around("@annotation(traceConfig)")
-    public Object traceMethod(ProceedingJoinPoint jp,
-                              DataDogTraceable traceConfig) throws Throwable {
-
-        Tracer tracer = GlobalTracer.get();
-        Span parent = tracer.activeSpan();
-        boolean finishOnComplete = (parent == null);
-        Span span = finishOnComplete
-                ? createRootSpan(tracer, jp, traceConfig)
-                : parent;
+    @Around("@annotation(cfg)")
+    public Object aroundTrace(ProceedingJoinPoint jp, DataDogTraceable cfg) throws Throwable {
+        Span active = tracer.activeSpan();
+        boolean isRoot = (active == null);
+        Span span = isRoot
+            ? tracer.buildSpan(resolveName(jp, cfg))
+                    .withTag(DDTags.SERVICE_NAME, resolveService(cfg))
+                    .withTag(DDTags.RESOURCE_NAME, resolveResource(cfg))
+                    .start()
+            : active;
 
         Object result = null;
         Throwable error = null;
@@ -80,218 +70,115 @@ public class DataDogTracingAspect {
             error = t;
             throw t;
         } finally {
-            scheduleFinish(tracer, span, finishOnComplete, jp, traceConfig, result, error);
+            finishAsync(span, isRoot, jp, cfg, result, error);
         }
     }
 
-    private ObjectMapper configureMapper(ObjectMapper mapper) {
-        ObjectMapper m = mapper.copy();
-        m.findAndRegisterModules();
-        m.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        m.disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
-        return m;
-    }
-
-    private Span createRootSpan(Tracer tracer,
-                                ProceedingJoinPoint jp,
-                                DataDogTraceable cfg) {
-        return tracer.buildSpan(resolveOperationName(jp, cfg))
-                     .withTag(DDTags.SERVICE_NAME, resolveServiceName(cfg))
-                     .withTag(DDTags.RESOURCE_NAME, resolveResourceName(cfg))
-                     .start();
-    }
-
-    private void scheduleFinish(Tracer tracer,
-                                Span span,
-                                boolean finishOnComplete,
-                                ProceedingJoinPoint jp,
-                                DataDogTraceable cfg,
-                                Object result,
-                                Throwable error) {
-
-        String[] paramNames = extractParameterNames(jp);
-        Object[] args = jp.getArgs();
-
-        Runnable processTask = () -> processSpan(tracer, span, cfg, args, paramNames, result, error);
-
-        CompletableFuture.runAsync(processTask, asyncExecutor)
-            .whenComplete((v, t) -> {
-                if (finishOnComplete) {
-                    span.finish();
-                }
-            });
-    }
-
-
-    private void processSpan(Tracer tracer,
-                             Span span,
+    private void finishAsync(Span span,
+                             boolean finishOnComplete,
+                             ProceedingJoinPoint jp,
                              DataDogTraceable cfg,
-                             Object[] args,
-                             String[] paramNames,
                              Object result,
                              Throwable error) {
-        try (Scope s = tracer.activateSpan(span)) {
-            MutableSpan mspan = asMutable(span);
+        String[] names = extractParamNames(jp);
+        Object[] args = jp.getArgs();
 
-            if (cfg.captureInputs()) {
-                tagInputs(mspan, args, paramNames);
+        CompletableFuture.runAsync(() -> {
+            try (Scope s = tracer.activateSpan(span)) {
+                MutableSpan m = span instanceof MutableSpan ? (MutableSpan) span : throwIllegal(span);
+
+                if (cfg.captureInputs()) {
+                    tagCollection(m, "context.input", args, names);
+                }
+                if (cfg.captureOutput()) {
+                    tagObject(m, "context.output", result);
+                }
+                if (error != null) {
+                    m.setTag("error", true);
+                    tagValue(m, "error.message", error.getMessage());
+                }
+            } catch (Exception ex) {
+                System.err.println("Erro no DataDogTracingAspect: " + ex.getMessage());
+            } finally {
+                if (finishOnComplete) span.finish();
             }
-            if (cfg.captureOutput()) {
-                tagOutput(mspan, result);
-            }
-            if (error != null) {
-                tagError(mspan, error);
-            }
-        }
+        }, executor);
     }
 
-    private MutableSpan asMutable(Span span) {
-        if (span instanceof MutableSpan) {
-            return (MutableSpan) span;
-        }
+    private MutableSpan throwIllegal(Span span) {
         throw new IllegalStateException("Span não mutável: " + span);
     }
 
-    private void tagInputs(MutableSpan span, Object[] args, String[] paramNames) {
-        if (paramNames.length > 0) {
-            int limit = Math.min(paramNames.length, args.length);
-            for (int i = 0; i < limit; i++) {
-                span.setTag("context.input." + paramNames[i],
-                            safeSerialize(args[i]));
-            }
-        } else {
-            for (int i = 0; i < args.length; i++) {
-                span.setTag("context.input.arg" + i,
-                            safeSerialize(args[i]));
-            }
+    private void tagCollection(MutableSpan span, String prefix, Object[] values, String[] names) {
+        for (int i = 0; i < values.length; i++) {
+            String key = names.length > i && names[i] != null
+                ? prefix + "." + names[i]
+                : prefix + ".arg" + i;
+            tagObject(span, key, values[i]);
         }
-    }
-
-    private void tagOutput(MutableSpan span, Object returnValue) {
-        Object processed = applyOutputRules(returnValue);
-        span.setTag("context.output", safeSerialize(processed));
-
-        if (processed instanceof List<?>) {
-            iterateList(span, (List<?>) processed);
-        } else if (processed instanceof Map<?, ?>) {
-            iterateMap(span, convertToMapOrEmpty(processed));
-        }
-    }
-
-    private void iterateList(MutableSpan span, List<?> list) {
-        for (int i = 0; i < list.size(); i++) {
-            Map<String, Object> flat = convertToMapOrEmpty(list.get(i));
-            for (Map.Entry<String, Object> e : flat.entrySet()) {
-                span.setTag(
-                  String.format("context.output.fuck[%d].%s", i, e.getKey()),
-                  String.valueOf(e.getValue())
-                );
-            }
-        }
-    }
-
-    private void iterateMap(MutableSpan span, Map<String, Object> map) {
-        Map<String, Object> sorted = new TreeMap<>(map);
-        for (Map.Entry<String, Object> e : sorted.entrySet()) {
-            span.setTag("context.output.detail" + e.getKey(),
-                        String.valueOf(e.getValue()));
-        }
-    }
-
-    private void tagError(MutableSpan span, Throwable error) {
-        span.setTag(Tags.ERROR.getKey(), true);
-        span.setTag("context.error.message", String.valueOf(error.getMessage()));
-        span.setTag("context.error.stack", serializeStackTrace(error));
-    }
-
-    private Object applyOutputRules(Object returnValue) {
-        if (returnValue instanceof List<?>) {
-            return returnValue;
-        }
-
-        if (returnValue instanceof Map<?, ?> map) {
-            for (Object v : map.values()) {
-                if (v instanceof List<?>) {
-                    return v;
-                }
-            }
-            boolean allNumeric = true;
-            TreeMap<Integer, Object> sorted = new TreeMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                String key = String.valueOf(entry.getKey());
-                if (!key.matches("\\d+")) {
-                    allNumeric = false;
-                    break;
-                }
-                sorted.put(Integer.valueOf(key), entry.getValue());
-            }
-            if (allNumeric) {
-                return new ArrayList<>(sorted.values());
-            }
-            return returnValue;
-        }
-
-        return returnValue;
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> convertToMapOrEmpty(Object obj) {
-        if (obj instanceof Map<?, ?>) {
-            return (Map<String, Object>) obj;
+    private void tagObject(MutableSpan span, String key, Object obj) {
+        if (obj == null) {
+            span.setTag(key, "null");
+        } else if (obj instanceof Map<?, ?> map) {
+            map.forEach((k, v) -> tagObject(span, key + "." + k, v));
+        } else if (obj instanceof Iterable<?> it) {
+            int idx = 0;
+            for (Object item : it) {
+                tagObject(span, key + "[" + idx++ + "]", item);
+            }
+        } else if (obj instanceof TemporalAccessor) {
+            span.setTag(key, obj.toString());
+        } else if (isPrimitiveOrWrapper(obj.getClass()) || obj instanceof String) {
+            span.setTag(key, String.valueOf(obj));
+        } else {
+            try {
+                Map<String, Object> map = mapper.convertValue(obj, Map.class);
+                map.forEach((k, v) -> tagObject(span, key + "." + k, v));
+            } catch (IllegalArgumentException e) {
+                span.setTag(key, safeSerialize(obj));
+            }
         }
-        try {
-            return objectMapper.convertValue(obj, Map.class);
-        } catch (IllegalArgumentException ex) {
-            return Collections.emptyMap();
-        }
     }
 
-    private String resolveServiceName(DataDogTraceable cfg) {
-        return !cfg.serviceName().isEmpty()
-                ? cfg.serviceName()
-                : System.getenv().getOrDefault("DD_SERVICE", "default-service");
+    private boolean isPrimitiveOrWrapper(Class<?> cls) {
+        return cls.isPrimitive() ||
+               cls == Boolean.class || cls == Byte.class ||
+               cls == Character.class || cls == Short.class ||
+               cls == Integer.class || cls == Long.class ||
+               cls == Float.class || cls == Double.class;
     }
 
-    private String resolveResourceName(DataDogTraceable cfg) {
-        return !cfg.resourceName().isEmpty()
-                ? cfg.resourceName()
-                : System.getenv().getOrDefault("DD_RESOURCE", "default-resource");
-    }
-
-    private String resolveOperationName(ProceedingJoinPoint jp,
-                                        DataDogTraceable cfg) {
-        return !cfg.operationName().isEmpty()
-                ? cfg.operationName()
-                : jp.getSignature().getName();
-    }
-
-    private String[] extractParameterNames(ProceedingJoinPoint jp) {
-        Signature sig = jp.getSignature();
-        if (sig instanceof MethodSignature) {
-            return ((MethodSignature) sig).getParameterNames();
-        }
-        return new String[0];
+    private void tagValue(MutableSpan span, String key, String value) {
+        span.setTag(key, value);
     }
 
     private String safeSerialize(Object obj) {
-        if (obj == null) {
-            return "null";
-        }
-        if (obj instanceof TemporalAccessor) {
-            return obj.toString();
-        }
         try {
-            return objectMapper.writeValueAsString(obj);
+            return mapper.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
             return String.valueOf(obj);
         }
     }
 
-    private String serializeStackTrace(Throwable t) {
-        StringBuilder sb = new StringBuilder();
-        for (StackTraceElement element : t.getStackTrace()) {
-            sb.append(element.toString()).append("\n");
+    private String resolveName(ProceedingJoinPoint jp, DataDogTraceable cfg) {
+        return !cfg.operationName().isEmpty() ? cfg.operationName() : jp.getSignature().getName();
+    }
+
+    private String resolveService(DataDogTraceable cfg) {
+        return !cfg.serviceName().isEmpty() ? cfg.serviceName() : System.getenv().getOrDefault("DD_SERVICE", "default-service");
+    }
+
+    private String resolveResource(DataDogTraceable cfg) {
+        return !cfg.resourceName().isEmpty() ? cfg.resourceName() : System.getenv().getOrDefault("DD_RESOURCE", "default-resource");
+    }
+
+    private String[] extractParamNames(ProceedingJoinPoint jp) {
+        if (jp.getSignature() instanceof MethodSignature ms) {
+            return ms.getParameterNames();
         }
-        return sb.toString();
+        return new String[0];
     }
 }
