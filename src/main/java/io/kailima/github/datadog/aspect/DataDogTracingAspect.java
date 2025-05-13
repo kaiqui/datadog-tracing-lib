@@ -1,7 +1,10 @@
 package io.kailima.github.datadog.aspect;
 
 import java.time.temporal.TemporalAccessor;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -33,8 +36,9 @@ public class DataDogTracingAspect {
     private final Tracer tracer = GlobalTracer.get();
     private final ObjectMapper mapper;
     private final Executor executor;
+    private final DataMaskingStrategy masker;
 
-    public DataDogTracingAspect(ObjectMapper baseMapper) {
+    public DataDogTracingAspect(ObjectMapper baseMapper, DataMaskingStrategy masker) {
         this.mapper = baseMapper.copy()
             .findAndRegisterModules()
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
@@ -47,6 +51,8 @@ public class DataDogTracingAspect {
             new LinkedBlockingQueue<>(1_000),
             new ThreadPoolExecutor.CallerRunsPolicy()
         );
+
+        this.masker = masker;
     }
 
     @Around("@annotation(cfg)")
@@ -60,7 +66,7 @@ public class DataDogTracingAspect {
                     .start()
             : active;
 
-        Object result = null;
+        Object result= null;
         Throwable error = null;
 
         try (Scope scope = tracer.activateSpan(span)) {
@@ -80,6 +86,12 @@ public class DataDogTracingAspect {
                              DataDogTraceable cfg,
                              Object result,
                              Throwable error) {
+        if (!cfg.captureInputs() && !cfg.captureOutput()) {
+            if (finishOnComplete) span.finish();
+            return;
+        }
+
+        Set<String> excluded = new HashSet<>(Arrays.asList(cfg.excludedFields()));
         String[] names = extractParamNames(jp);
         Object[] args = jp.getArgs();
 
@@ -88,12 +100,12 @@ public class DataDogTracingAspect {
                 MutableSpan m = span instanceof MutableSpan ? (MutableSpan) span : throwIllegal(span);
 
                 if (cfg.captureInputs()) {
-                    tagCollection(m, "context.input", args, names);
+                    tagCollection(m, "context.input", args, names, excluded);
                 }
                 if (cfg.captureOutput()) {
-                    tagObject(m, "context.output", result);
+                    tagObject(m, "context.output", result, excluded);
                 }
-                if (error != null) {
+                if (error != null && !excluded.contains("error.message")) {
                     m.setTag("error", true);
                     tagValue(m, "error.message", error.getMessage());
                 }
@@ -109,36 +121,50 @@ public class DataDogTracingAspect {
         throw new IllegalStateException("Span não mutável: " + span);
     }
 
-    private void tagCollection(MutableSpan span, String prefix, Object[] values, String[] names) {
+    private void tagCollection(MutableSpan span,
+                               String prefix,
+                               Object[] values,
+                               String[] names,
+                               Set<String> excluded) {
         for (int i = 0; i < values.length; i++) {
-            String key = names.length > i && names[i] != null
-                ? prefix + "." + names[i]
-                : prefix + ".arg" + i;
-            tagObject(span, key, values[i]);
+            String field = names.length > i && names[i] != null ? names[i] : "arg" + i;
+            if (excluded.contains(field)) continue;
+            String key = prefix + "." + field;
+            tagObject(span, key, values[i], excluded);
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void tagObject(MutableSpan span, String key, Object obj) {
+    private void tagObject(MutableSpan span,
+                           String key,
+                           Object obj,
+                           Set<String> excluded) {
+        String fieldName = key.contains(".")
+            ? key.substring(key.lastIndexOf('.') + 1).replaceAll("\\[\\d+\\]", "")
+            : key;
+        if (excluded.contains(fieldName)) return;
+
         if (obj == null) {
-            span.setTag(key, "null");
+            return;
         } else if (obj instanceof Map<?, ?> map) {
-            map.forEach((k, v) -> tagObject(span, key + "." + k, v));
+            map.forEach((k, v) -> tagObject(span, key + "." + k, v, excluded));
         } else if (obj instanceof Iterable<?> it) {
             int idx = 0;
             for (Object item : it) {
-                tagObject(span, key + "[" + idx++ + "]", item);
+                tagObject(span, key + "[" + idx++ + "]", item, excluded);
             }
         } else if (obj instanceof TemporalAccessor) {
-            span.setTag(key, obj.toString());
+            tagValue(span, key, obj.toString());
         } else if (isPrimitiveOrWrapper(obj.getClass()) || obj instanceof String) {
-            span.setTag(key, String.valueOf(obj));
+            tagValue(span, key, String.valueOf(obj));
         } else {
             try {
                 Map<String, Object> map = mapper.convertValue(obj, Map.class);
-                map.forEach((k, v) -> tagObject(span, key + "." + k, v));
+                map.forEach((k, v) -> 
+                    tagObject(span, key + "." + k, v, excluded)
+                );
             } catch (IllegalArgumentException e) {
-                span.setTag(key, safeSerialize(obj));
+                tagValue(span, key, safeSerialize(obj));
             }
         }
     }

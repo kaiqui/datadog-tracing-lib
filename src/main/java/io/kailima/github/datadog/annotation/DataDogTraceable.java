@@ -13,4 +13,5 @@ public @interface DataDogTraceable {
     String operationName() default "";
     boolean captureInputs() default true;
     boolean captureOutput() default true;
+    String[] excludedFields() default {};
 }
