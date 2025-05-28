@@ -7,14 +7,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -38,21 +36,16 @@ public class DataDogTracingAspect {
     private final Executor executor;
     private final DataMaskingStrategy masker;
 
-    public DataDogTracingAspect(ObjectMapper baseMapper, DataMaskingStrategy masker) {
+    public DataDogTracingAspect(
+            ObjectMapper baseMapper,
+            DataMaskingStrategy masker,
+            @Qualifier("datadogAsyncExecutor") Executor executor) {
         this.mapper = baseMapper.copy()
             .findAndRegisterModules()
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
-
-        int cores = Runtime.getRuntime().availableProcessors();
-        this.executor = new ThreadPoolExecutor(
-            cores, cores * 2,
-            30, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(1_000),
-            new ThreadPoolExecutor.CallerRunsPolicy()
-        );
-
         this.masker = masker;
+        this.executor = executor;
     }
 
     @Around("@annotation(cfg)")
@@ -66,7 +59,7 @@ public class DataDogTracingAspect {
                     .start()
             : active;
 
-        Object result= null;
+        Object result = null;
         Throwable error = null;
 
         try (Scope scope = tracer.activateSpan(span)) {
@@ -91,23 +84,19 @@ public class DataDogTracingAspect {
             return;
         }
 
-        Set<String> excluded = new HashSet<>(Arrays.asList(cfg.excludedFields()));
         String[] names = extractParamNames(jp);
         Object[] args = jp.getArgs();
+        Set<String> excluded = new HashSet<>(Arrays.asList(cfg.excludedFields()));
 
         CompletableFuture.runAsync(() -> {
             try (Scope s = tracer.activateSpan(span)) {
-                MutableSpan m = span instanceof MutableSpan ? (MutableSpan) span : throwIllegal(span);
+                MutableSpan m = (MutableSpan) span;
 
-                if (cfg.captureInputs()) {
-                    tagCollection(m, "context.input", args, names, excluded);
-                }
-                if (cfg.captureOutput()) {
-                    tagObject(m, "context.output", result, excluded);
-                }
+                if (cfg.captureInputs())  tagCollection(m, "context.input",  args,   names, excluded);
+                if (cfg.captureOutput())  tagObject(   m, "context.output", result,       excluded);
                 if (error != null && !excluded.contains("error.message")) {
                     m.setTag("error", true);
-                    tagValue(m, "error.message", error.getMessage());
+                    m.setTag("error.message", error.getMessage());
                 }
             } catch (Exception ex) {
                 System.err.println("Erro no DataDogTracingAspect: " + ex.getMessage());
@@ -115,10 +104,6 @@ public class DataDogTracingAspect {
                 if (finishOnComplete) span.finish();
             }
         }, executor);
-    }
-
-    private MutableSpan throwIllegal(Span span) {
-        throw new IllegalStateException("Span não mutável: " + span);
     }
 
     private void tagCollection(MutableSpan span,
@@ -160,9 +145,7 @@ public class DataDogTracingAspect {
         } else {
             try {
                 Map<String, Object> map = mapper.convertValue(obj, Map.class);
-                map.forEach((k, v) -> 
-                    tagObject(span, key + "." + k, v, excluded)
-                );
+                map.forEach((k, v) -> tagObject(span, key + "." + k, v, excluded));
             } catch (IllegalArgumentException e) {
                 tagValue(span, key, safeSerialize(obj));
             }
@@ -190,15 +173,21 @@ public class DataDogTracingAspect {
     }
 
     private String resolveName(ProceedingJoinPoint jp, DataDogTraceable cfg) {
-        return !cfg.operationName().isEmpty() ? cfg.operationName() : jp.getSignature().getName();
+        return !cfg.operationName().isEmpty()
+            ? cfg.operationName()
+            : jp.getSignature().getName();
     }
 
     private String resolveService(DataDogTraceable cfg) {
-        return !cfg.serviceName().isEmpty() ? cfg.serviceName() : System.getenv().getOrDefault("DD_SERVICE", "default-service");
+        return !cfg.serviceName().isEmpty()
+            ? cfg.serviceName()
+            : System.getenv().getOrDefault("DD_SERVICE", "default-service");
     }
 
     private String resolveResource(DataDogTraceable cfg) {
-        return !cfg.resourceName().isEmpty() ? cfg.resourceName() : System.getenv().getOrDefault("DD_RESOURCE", "default-resource");
+        return !cfg.resourceName().isEmpty()
+            ? cfg.resourceName()
+            : System.getenv().getOrDefault("DD_RESOURCE", "default-resource");
     }
 
     private String[] extractParamNames(ProceedingJoinPoint jp) {
