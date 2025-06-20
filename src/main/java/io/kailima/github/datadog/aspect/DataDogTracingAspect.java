@@ -7,13 +7,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,24 +27,30 @@ import io.opentracing.Tracer;
 import io.opentracing.util.GlobalTracer;
 
 @Aspect
-@Component
 public class DataDogTracingAspect {
 
     private final Tracer tracer = GlobalTracer.get();
     private final ObjectMapper mapper;
-    private final Executor executor;
-    private final DataMaskingStrategy masker;
+    private Executor executor;
+    
+    public DataDogTracingAspect() {
+        this.mapper = createObjectMapper();
+    }
 
-    public DataDogTracingAspect(
-            ObjectMapper baseMapper,
-            DataMaskingStrategy masker,
-            @Qualifier("datadogAsyncExecutor") Executor executor) {
-        this.mapper = baseMapper.copy()
+    // Permite configuração externa do executor
+    public void setExecutor(Executor executor) {
+        this.executor = executor;
+    }
+
+    public Executor getExecutor() {
+        return this.executor;
+    }
+
+    private ObjectMapper createObjectMapper() {
+        return new ObjectMapper()
             .findAndRegisterModules()
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
-        this.masker = masker;
-        this.executor = executor;
     }
 
     @Around("@annotation(cfg)")
@@ -88,7 +93,25 @@ public class DataDogTracingAspect {
         Object[] args = jp.getArgs();
         Set<String> excluded = new HashSet<>(Arrays.asList(cfg.excludedFields()));
 
-        CompletableFuture.runAsync(() -> {
+        try {
+            CompletableFuture.runAsync(() -> {
+                try (Scope s = tracer.activateSpan(span)) {
+                    MutableSpan m = (MutableSpan) span;
+
+                    if (cfg.captureInputs())  tagCollection(m, "context.input",  args,   names, excluded);
+                    if (cfg.captureOutput())  tagObject(   m, "context.output", result,       excluded);
+                    if (error != null && !excluded.contains("error.message")) {
+                        m.setTag("error", true);
+                        m.setTag("error.message", error.getMessage());
+                    }
+                } catch (Exception ex) {
+                    System.err.println("Erro no DataDogTracingAspect: " + ex.getMessage());
+                } finally {
+                    if (finishOnComplete) span.finish();
+                }
+            }, executor);
+        } catch (RejectedExecutionException e) {
+            // Fallback síncrono
             try (Scope s = tracer.activateSpan(span)) {
                 MutableSpan m = (MutableSpan) span;
 
@@ -99,11 +122,11 @@ public class DataDogTracingAspect {
                     m.setTag("error.message", error.getMessage());
                 }
             } catch (Exception ex) {
-                System.err.println("Erro no DataDogTracingAspect: " + ex.getMessage());
+                System.err.println("Erro no fallback síncrono: " + ex.getMessage());
             } finally {
                 if (finishOnComplete) span.finish();
             }
-        }, executor);
+        }
     }
 
     private void tagCollection(MutableSpan span,
@@ -119,7 +142,6 @@ public class DataDogTracingAspect {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private void tagObject(MutableSpan span,
                            String key,
                            Object obj,
@@ -131,9 +153,13 @@ public class DataDogTracingAspect {
 
         if (obj == null) {
             return;
-        } else if (obj instanceof Map<?, ?> map) {
-            map.forEach((k, v) -> tagObject(span, key + "." + k, v, excluded));
-        } else if (obj instanceof Iterable<?> it) {
+        } else if (obj instanceof Map) {
+            Map<?, ?> map = (Map<?, ?>) obj;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                tagObject(span, key + "." + entry.getKey(), entry.getValue(), excluded);
+            }
+        } else if (obj instanceof Iterable) {
+            Iterable<?> it = (Iterable<?>) obj;
             int idx = 0;
             for (Object item : it) {
                 tagObject(span, key + "[" + idx++ + "]", item, excluded);
@@ -145,7 +171,9 @@ public class DataDogTracingAspect {
         } else {
             try {
                 Map<String, Object> map = mapper.convertValue(obj, Map.class);
-                map.forEach((k, v) -> tagObject(span, key + "." + k, v, excluded));
+                for (Map.Entry<String, Object> entry : map.entrySet()) {
+                    tagObject(span, key + "." + entry.getKey(), entry.getValue(), excluded);
+                }
             } catch (IllegalArgumentException e) {
                 tagValue(span, key, safeSerialize(obj));
             }
@@ -191,7 +219,8 @@ public class DataDogTracingAspect {
     }
 
     private String[] extractParamNames(ProceedingJoinPoint jp) {
-        if (jp.getSignature() instanceof MethodSignature ms) {
+        if (jp.getSignature() instanceof MethodSignature) {
+            MethodSignature ms = (MethodSignature) jp.getSignature();
             return ms.getParameterNames();
         }
         return new String[0];

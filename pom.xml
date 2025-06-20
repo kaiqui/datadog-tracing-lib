@@ -22,8 +22,8 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <java.version>17</java.version>
-        <dd-trace-api.version>1.45.2</dd-trace-api.version>
+        <java.version>11</java.version>
+        <dd-trace-api.version>1.49.0</dd-trace-api.version>
         <jackson.version>2.15.2</jackson.version>
         <central.publishing.plugin.version>0.7.0</central.publishing.plugin.version>
     </properties>
